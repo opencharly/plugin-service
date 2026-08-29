@@ -47,12 +47,28 @@ func (verb) Reserved() string { return "service" }
 // RunVerb (do:assert) probes running/enabled via the live CheckContext. Mirrors r.runService:
 // supervisorctl status first (the disposable pods run supervisord), systemctl is-active/
 // is-enabled fallback. A supervisord service is "enabled" while supervisord is up.
+//
+// The running probe checks the ACTUAL supervisorctl STATE (not a bare `grep -q RUNNING`):
+// a program in a TERMINAL state (FATAL/BACKOFF/EXITED — supervisord gave up or is not
+// running) must FAIL the running check, and must NOT fall through to the systemctl fallback
+// (which reports the wrapped launcher unit as "active" even when the supervisord child is
+// dead — the vacuous-pass defect of opencharly/charly#456). A transient STARTING passes;
+// only a program supervisorctl does not know at all falls back to systemd.
 func (verb) RunVerb(ctx context.Context, cc kit.CheckContext, op *spec.Op) kit.Result {
 	var in params.ServiceInput
 	kit.DecodeInput(op.PluginInput, &in)
 	svc := shellquote.ShellQuote(in.Service)
 	if in.Running != nil {
-		probe := fmt.Sprintf(`supervisorctl status %[1]s 2>/dev/null | grep -q RUNNING || systemctl is-active --quiet %[1]s`, svc)
+		probe := fmt.Sprintf(`
+state=$(supervisorctl status %[1]s 2>/dev/null | awk 'NR==1 && NF>=2 {print $2}')
+if [ -n "$state" ]; then
+  case "$state" in
+    RUNNING|STARTING) exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
+systemctl is-active --quiet %[1]s
+`, svc)
 		_, _, exit, err := cc.Exec().RunCapture(ctx, probe)
 		if err != nil {
 			return kit.Failf("running probe: %v", err)
@@ -63,7 +79,16 @@ func (verb) RunVerb(ctx context.Context, cc kit.CheckContext, op *spec.Op) kit.R
 		}
 	}
 	if in.Enabled != nil {
-		probe := fmt.Sprintf(`supervisorctl status %[1]s 2>/dev/null | grep -qE '(RUNNING|STARTING|STOPPED)' || systemctl is-enabled --quiet %[1]s`, svc)
+		probe := fmt.Sprintf(`
+state=$(supervisorctl status %[1]s 2>/dev/null | awk 'NR==1 && NF>=2 {print $2}')
+if [ -n "$state" ]; then
+  case "$state" in
+    RUNNING|STARTING|STOPPED) exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
+systemctl is-enabled --quiet %[1]s
+`, svc)
 		_, _, exit, _ := cc.Exec().RunCapture(ctx, probe)
 		isEnabled := exit == 0
 		if isEnabled != *in.Enabled {
