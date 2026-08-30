@@ -42,16 +42,31 @@ func sweepFailedUnits(ctx context.Context, cc kit.CheckContext, in params.Servic
 	// check exists to close.
 	trimmed := strings.TrimSpace(out)
 	if exit != 0 && trimmed == "" {
-		// Ambiguous: could be "nothing failed" or "could not ask". Ask a question whose
-		// answer is unambiguous — a manager that answers `is-system-running` is present.
+		// Ambiguous, and dangerously so: an empty non-zero result can mean "nothing
+		// failed" OR "there is no manager to ask". systemctl writes the latter to
+		// STDERR — `System has not been booted with systemd as init system (PID 1).
+		// Can't operate.` — leaving stdout empty and exiting 1, which is
+		// indistinguishable from success by exit code alone.
+		//
+		// So ask `is-system-running`, and read its OUTPUT rather than its exit code.
+		// It exits non-zero for `degraded`, `starting` and `maintenance` too, all of
+		// which are live managers; only `offline` and `unknown` mean the question could
+		// not be asked. Measured in a plain Arch container: `offline`, exit 1 — an
+		// earlier revision keyed on `exit == 127` and therefore passed VACUOUSLY on
+		// every container without systemd, which is the exact failure-open this check
+		// exists to prevent.
 		probe := fmt.Sprintf("systemctl%s is-system-running 2>/dev/null", userFlag)
-		_, _, aliveExit, aliveErr := cc.Exec().RunCapture(ctx, probe)
-		// is-system-running exits non-zero for degraded/starting, which are all live
-		// managers; only a total failure to answer (127 / no such command) is fatal.
-		if aliveErr != nil || aliveExit == 127 {
-			return kit.Failf("none_failed: cannot reach the %s systemd manager — "+
-				"`systemctl%s --failed` exited %d with no output. Not the same as "+
-				"'nothing failed'", scopeName(in.Scope), userFlag, exit)
+		aliveOut, _, _, aliveErr := cc.Exec().RunCapture(ctx, probe)
+		state := strings.TrimSpace(aliveOut)
+		if aliveErr != nil || state == "" || state == "offline" || state == "unknown" {
+			reported := state
+			if reported == "" {
+				reported = "no answer"
+			}
+			return kit.Failf("none_failed: cannot reach the %s systemd manager "+
+				"(is-system-running: %s) — `systemctl%s --failed` exited %d with no "+
+				"output, which is NOT the same as 'nothing failed'",
+				scopeName(in.Scope), reported, userFlag, exit)
 		}
 	}
 

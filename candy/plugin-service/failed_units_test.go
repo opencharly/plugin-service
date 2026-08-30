@@ -64,15 +64,44 @@ func TestNoneFailed_BadIgnoreRegexFails(t *testing.T) {
 // manager / no bus to ask. Reading the second as the first turns the strongest whole-machine
 // assertion into an unconditional pass.
 func TestNoneFailed_UnreachableManagerFailsRatherThanPassing(t *testing.T) {
+	// The values here are MEASURED, not invented. In a plain Arch container:
+	//   $ systemctl --failed --no-legend --plain
+	//   System has not been booted with systemd as init system (PID 1). Can't operate.
+	//   [stderr; stdout empty] exit=1
+	//   $ systemctl is-system-running
+	//   offline
+	//   exit=1
+	// An earlier revision keyed on `exit == 127` and so passed VACUOUSLY here — the
+	// check reported "no failed system units" on a machine with no systemd at all.
 	res := runService(t, []fakeResponse{
 		{matchPrefix: "--failed", stdout: "", exit: 1},
-		{matchPrefix: "is-system-running", stdout: "", exit: 127},
+		{matchPrefix: "is-system-running", stdout: "offline\n", exit: 1},
 	}, map[string]any{"none_failed": true, "scope": "user"})
 	if res.Status != kit.StatusFail {
 		t.Fatalf("an unreachable manager must FAIL, not pass as 'nothing failed'; got %+v", res)
 	}
 	if !strings.Contains(res.Message, "cannot reach") {
 		t.Errorf("the message must say the manager was unreachable; got %q", res.Message)
+	}
+}
+
+func TestNoneFailed_UnknownStateAlsoFails(t *testing.T) {
+	res := runService(t, []fakeResponse{
+		{matchPrefix: "--failed", stdout: "", exit: 1},
+		{matchPrefix: "is-system-running", stdout: "unknown\n", exit: 1},
+	}, map[string]any{"none_failed": true})
+	if res.Status != kit.StatusFail {
+		t.Errorf("is-system-running=unknown means the manager could not be asked; got %+v", res)
+	}
+}
+
+func TestNoneFailed_NoAnswerAtAllFails(t *testing.T) {
+	res := runService(t, []fakeResponse{
+		{matchPrefix: "--failed", stdout: "", exit: 1},
+		{matchPrefix: "is-system-running", stdout: "", exit: 1},
+	}, map[string]any{"none_failed": true})
+	if res.Status != kit.StatusFail {
+		t.Errorf("an empty is-system-running answer must not be read as reachable; got %+v", res)
 	}
 }
 
