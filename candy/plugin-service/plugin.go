@@ -57,9 +57,33 @@ func (verb) Reserved() string { return "service" }
 func (verb) RunVerb(ctx context.Context, cc kit.CheckContext, op *spec.Op) kit.Result {
 	var in params.ServiceInput
 	kit.DecodeInput(op.PluginInput, &in)
+
+	// `systemctl --user` when the step asks for the calling user's manager. Every probe
+	// below interpolates this, so the two shapes share one switch.
+	userFlag := ""
+	if in.Scope == "user" {
+		userFlag = " --user"
+	}
+
+	// The none_failed sweep is about the WHOLE unit set, so it takes no service name and
+	// returns on its own. Asserting both in one step would be two subjects in one result.
+	if in.NoneFailed != nil {
+		if in.Service != "" {
+			return kit.Fail("service: none_failed asserts about every unit, so it cannot " +
+				"also name a service — use two steps")
+		}
+		return sweepFailedUnits(ctx, cc, in, userFlag)
+	}
+	if in.Service == "" {
+		return kit.Fail("service: a step must name a `service:` to probe, or set " +
+			"`none_failed: true` to sweep every unit")
+	}
+
 	svc := shellquote.ShellQuote(in.Service)
 	if in.Running != nil {
-		probe := fmt.Sprintf(`
+		probe := userScopedUnitProbe("is-active", in.Service)
+		if in.Scope != "user" {
+			probe = fmt.Sprintf(`
 state=$(supervisorctl status %[1]s 2>/dev/null | awk 'NR==1 && NF>=2 {print $2}')
 if [ -n "$state" ]; then
   case "$state" in
@@ -69,6 +93,7 @@ if [ -n "$state" ]; then
 fi
 systemctl is-active --quiet %[1]s
 `, svc)
+		}
 		_, _, exit, err := cc.Exec().RunCapture(ctx, probe)
 		if err != nil {
 			return kit.Failf("running probe: %v", err)
@@ -79,7 +104,9 @@ systemctl is-active --quiet %[1]s
 		}
 	}
 	if in.Enabled != nil {
-		probe := fmt.Sprintf(`
+		probe := userScopedUnitProbe("is-enabled", in.Service)
+		if in.Scope != "user" {
+			probe = fmt.Sprintf(`
 state=$(supervisorctl status %[1]s 2>/dev/null | awk 'NR==1 && NF>=2 {print $2}')
 if [ -n "$state" ]; then
   case "$state" in
@@ -89,6 +116,7 @@ if [ -n "$state" ]; then
 fi
 systemctl is-enabled --quiet %[1]s
 `, svc)
+		}
 		_, _, exit, _ := cc.Exec().RunCapture(ctx, probe)
 		isEnabled := exit == 0
 		if isEnabled != *in.Enabled {
