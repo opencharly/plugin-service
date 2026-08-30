@@ -1,7 +1,7 @@
 version: 2026.232.0520
 plugin-service:
     candy:
-        version: 2026.176.2900
+        version: 2026.242.2305
         description: |-
             The `service` TYPED-STEP state-provision verb relocated into a candy.
             CHECK: probe running/enabled via supervisorctl/systemctl through the live

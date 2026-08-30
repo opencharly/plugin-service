@@ -36,7 +36,36 @@
 #ServiceInput: {
 	// service — the unit name the probe queries (assert) / the typed ServicePackagedStep
 	// enables (act). The verb discriminator.
-	service: string @go(Service)
+	// Optional because of `none_failed:` below, which asserts about the WHOLE unit set
+	// rather than one named unit. Every existing step sets it; a step that sets neither
+	// is rejected by the verb with a message naming both shapes.
+	service?: string @go(Service)
+	// scope — which systemd manager to ask: the system manager (default, today's
+	// behaviour) or the calling user's own (`systemctl --user`).
+	//
+	// Without this, a user unit had no typed form at all: #ServiceInput asked the system
+	// manager unconditionally, so `pipewire.service`, `wireplumber.service` and every
+	// other session service could only be probed by dropping to `command:`. The repo
+	// does that in 85 places today.
+	//
+	// supervisord has no user scope, so `scope: user` skips the supervisorctl leg
+	// entirely and asks systemd directly — asking supervisorctl about a user unit would
+	// find nothing and fall through, which is the right answer by accident rather than
+	// by intent.
+	scope?: "system" | "user" @go(Scope)
+	// none_failed — assert that NO unit is in the failed state, rather than asserting
+	// about one named unit. `systemctl --failed` is the single strongest whole-machine
+	// assertion available: it catches the unit nobody thought to name, which is exactly
+	// the one that breaks a machine. There is no per-unit spelling for "and nothing else
+	// broke either".
+	//
+	// Set with `scope:` to sweep either manager. Requires no `service:`.
+	none_failed?: bool @go(NoneFailed,type=*bool)
+	// ignore — a regex of unit names to overlook in a none_failed sweep. A workstation
+	// carries units that are expected to fail (a fingerprint reader with no hardware, a
+	// vendor agent with no licence); a fresh VM should need none, which is why this is
+	// opt-in and per-step rather than a built-in allowlist somebody would grow forever.
+	ignore?: string @go(Ignore)
 	// running — optional expected run state (supervisorctl RUNNING / systemctl
 	// is-active). Tri-state pointer so an absent key skips the running probe.
 	running?: bool @go(Running,type=*bool)
