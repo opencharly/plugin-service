@@ -3,10 +3,11 @@
 //   - CheckVerbProvider (do:assert): probe running/enabled via supervisorctl/systemctl
 //     through the live kit.CheckContext.
 //   - ProvisionActor (do:act runtime): render the systemctl/supervisorctl enable shell.
-//   - StepProvider (do:act build/deploy install timeline): lower into a ServicePackagedStep
-//     (the host materializes the descriptor, keeping the load-bearing Reverse() in package
-//     main). Relocated out of charly's module (formerly charly/plugin/builtins/service +
-//     charly/plugin_verb_service.go); COMPILED-IN-ONLY.
+//   - StepProvider (do:act build/deploy install timeline): MATERIALIZE the ServicePackagedStep
+//     itself (the load-bearing Reverse() stays in package main). The candy owns both the kind
+//     mapping and the materialization; core holds no per-kind switch (C7). Relocated out of
+//     charly's module (formerly charly/plugin/builtins/service + charly/plugin_verb_service.go);
+//     COMPILED-IN-ONLY.
 package service
 
 import (
@@ -137,14 +138,22 @@ func (verb) RenderProvisionScript(op *spec.Op, _ []string) (string, bool) {
 		`else echo "no service manager" >&2; exit 1; fi`, svc), true
 }
 
-// StepKind names the typed install-plan step service's build/deploy act lowers into.
-func (verb) StepKind() kit.StepKindName { return kit.StepKindServicePackaged }
+// StepKind names the typed install-plan step service's build/deploy act lowers into — the
+// internal InstallPlan IR kind, returned directly (C7: the candy owns the kind mapping; core
+// holds no per-kind switch).
+func (verb) StepKind() spec.StepKind { return spec.StepKindServicePackaged }
 
-// ConstructStepDescriptor (do:act build/deploy) returns the candy-decodable inputs for the
-// ServicePackagedStep — enable the named packaged unit. The host materializer adds the
-// op-resolved scope + candy name and keeps the load-bearing Reverse().
-func (verb) ConstructStepDescriptor(op *spec.Op) kit.StepDescriptor {
+// MaterializeStep (do:act build/deploy) builds the real ServicePackagedStep — enable the named
+// packaged unit, at the op-resolved target scope, attributed to the candy. The load-bearing
+// Reverse() (disable / restore-enabled / remove-dropin) lives on the built step in package main.
+// service consumes only runAsUser + candyName of the four ctx scalars.
+func (verb) MaterializeStep(op *spec.Op, runAsUser, candyName, _ string, _ []string) spec.InstallStep {
 	var in params.ServiceInput
 	kit.DecodeInput(op.PluginInput, &in)
-	return kit.StepDescriptor{ServicePackaged: &kit.ServicePackagedDesc{Unit: in.Service, Enable: true}}
+	return &spec.ServicePackagedStep{
+		Unit:        in.Service,
+		TargetScope: spec.OpStepScope(runAsUser),
+		Enable:      true,
+		CandyName:   candyName,
+	}
 }
