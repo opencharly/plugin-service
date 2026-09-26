@@ -80,6 +80,9 @@ func (c *fakeCC) Box() string                                               { re
 func (c *fakeCC) Instance() string                                          { return "" }
 func (c *fakeCC) Distros() []string                                         { return nil }
 func (c *fakeCC) AddBackground(int)                                         {}
+func (c *fakeCC) InvokeProvider(context.Context, string, string, string, []byte, []byte) ([]byte, error) {
+	return nil, nil
+}
 
 // TestServiceVerb: running true/false. Relocated from charly/checkrun_verbs_test.go's
 // TestRunner_Service (#55 decoupling cone, Batch D) — mirrors candy/plugin-port and
@@ -160,18 +163,26 @@ func TestServiceVerb_RenderProvisionScript(t *testing.T) {
 	}
 }
 
-// TestServiceVerb_StepProvider: the TYPED-STEP role names the ServicePackaged step kind
-// and decodes plugin_input into the StepDescriptor the host materializer consumes.
-// Relocated from charly/plugin_service_relocated_test.go's
-// TestRelocatedServiceVerb_DispatchesViaKit (the step-role behavior half; the dispatch
-// wiring + the materializer stay in charly).
+// TestServiceVerb_StepProvider: the TYPED-STEP role names the internal ServicePackaged IR
+// kind and MATERIALIZES the real *spec.ServicePackagedStep from plugin_input + the host-
+// resolved ctx scalars (runAsUser → the step scope, candyName → provenance). The candy owns
+// the materialization (C7); the load-bearing Reverse() stays in package main.
 func TestServiceVerb_StepProvider(t *testing.T) {
-	got := verb{}.StepKind()
-	if got != kit.StepKindServicePackaged {
-		t.Fatalf("StepKind = %v, want StepKindServicePackaged", got)
+	if got := (verb{}).StepKind(); got != spec.StepKindServicePackaged {
+		t.Fatalf("StepKind = %v, want %v", got, spec.StepKindServicePackaged)
 	}
-	desc := verb{}.ConstructStepDescriptor(&spec.Op{PluginInput: map[string]any{"service": "nginx"}})
-	if desc.ServicePackaged == nil || desc.ServicePackaged.Unit != "nginx" || !desc.ServicePackaged.Enable {
-		t.Fatalf("step descriptor = %+v", desc)
+	step := (verb{}).MaterializeStep(
+		&spec.Op{PluginInput: map[string]any{"service": "nginx"}}, "1000", "mylayer", "", nil)
+	sps, ok := step.(*spec.ServicePackagedStep)
+	if !ok {
+		t.Fatalf("MaterializeStep returned %T, want *spec.ServicePackagedStep", step)
+	}
+	if sps.Unit != "nginx" || !sps.Enable || sps.CandyName != "mylayer" || sps.TargetScope != spec.ScopeUser {
+		t.Fatalf("step = %+v, want Unit=nginx Enable=true CandyName=mylayer TargetScope=user", sps)
+	}
+	// A root run-as resolves to the system scope.
+	rootStep := (verb{}).MaterializeStep(&spec.Op{PluginInput: map[string]any{"service": "nginx"}}, "0", "mylayer", "", nil)
+	if rootStep.(*spec.ServicePackagedStep).TargetScope != spec.ScopeSystem {
+		t.Fatalf("root scope = %v, want system", rootStep.(*spec.ServicePackagedStep).TargetScope)
 	}
 }
