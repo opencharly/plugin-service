@@ -43,6 +43,15 @@ func NewMeta() pb.PluginMetaServer {
 
 type verb struct{}
 
+// Compile-time proof of the three sdk/kit roles this candy carries (the C7 typed-step
+// contract in particular): a drift in the method set fails the BUILD here, never at a
+// runtime dispatch. `kit.StepProvider` = `checkstep.StepProvider` (StepKind + MaterializeStep).
+var (
+	_ kit.CheckVerbProvider = verb{}
+	_ kit.ProvisionActor    = verb{}
+	_ kit.StepProvider      = verb{}
+)
+
 func (verb) Reserved() string { return "service" }
 
 // RunVerb (do:assert) probes running/enabled via the live CheckContext. Mirrors r.runService:
